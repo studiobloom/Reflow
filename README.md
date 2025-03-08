@@ -2,6 +2,8 @@
 
 Downloads Webflow sites to static HTML, preserving structure and styling.
 
+Download the latest release from: https://github.com/studiobloom/Reflow/releases
+
 Install:
 ```
 pip install -r requirements.txt

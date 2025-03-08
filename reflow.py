@@ -84,6 +84,34 @@ class Reflow:
         # Create working directory
         os.makedirs(self.working_dir, exist_ok=True)
     
+    def sanitize_filename(self, filename):
+        """
+        Sanitize a filename by decoding URL-encoded characters and removing/replacing invalid characters.
+        
+        Args:
+            filename (str): The filename to sanitize
+            
+        Returns:
+            str: The sanitized filename
+        """
+        # First, URL-decode the filename to handle percent-encoded characters
+        decoded_filename = unquote(filename)
+        
+        # Replace problematic characters with underscores
+        # This includes characters that are not allowed in filenames on various operating systems
+        invalid_chars = r'[<>:"/\\|?*\x00-\x1F]'
+        sanitized = re.sub(invalid_chars, '_', decoded_filename)
+        
+        # Replace spaces with underscores for better compatibility
+        sanitized = sanitized.replace(' ', '_')
+        
+        # Ensure the filename isn't too long (max 255 characters)
+        if len(sanitized) > 255:
+            name, ext = os.path.splitext(sanitized)
+            sanitized = name[:255-len(ext)] + ext
+            
+        return sanitized
+    
     def download_page(self, url, output_path=None):
         """
         Download a page from the Webflow site.
@@ -108,6 +136,11 @@ class Reflow:
             # Add delay to avoid rate limiting
             time.sleep(self.delay)
             
+            # Ensure correct encoding detection
+            if response.encoding is None or response.encoding == 'ISO-8859-1':
+                # Try to detect encoding from content
+                response.encoding = response.apparent_encoding
+            
             html_content = response.text
             soup = BeautifulSoup(html_content, 'html.parser')
             
@@ -121,6 +154,60 @@ class Reflow:
             logger.error(f"Error downloading {url}: {e}")
             return None, None
     
+    def remove_webflow_badge_from_html(self, soup):
+        """
+        Remove Webflow badge from HTML content.
+        
+        Args:
+            soup (BeautifulSoup): The BeautifulSoup object of the page
+            
+        Returns:
+            BeautifulSoup: The processed BeautifulSoup object
+        """
+        logger.info("Removing Webflow badge from HTML...")
+        
+        # 1. Remove any existing badge elements
+        badge_selectors = [
+            '.w-webflow-badge',
+            'a[href*="webflow.com?utm_campaign=brandjs"]',
+            'a.w-webflow-badge'
+        ]
+        
+        for selector in badge_selectors:
+            for element in soup.select(selector):
+                logger.info(f"Removing badge element: {element}")
+                element.decompose()
+        
+        # 2. Remove any script tags that might add the badge
+        for script in soup.find_all('script'):
+            if script.string and ('webflow-badge' in script.string or 'createBadge' in script.string):
+                logger.info("Removing script tag containing badge code")
+                script.decompose()
+        
+        # 3. Remove any style tags that style the badge
+        for style in soup.find_all('style'):
+            if style.string and 'w-webflow-badge' in style.string:
+                logger.info("Removing style tag containing badge styles")
+                style.decompose()
+        
+        # 4. Remove any images that are part of the badge
+        badge_image_patterns = [
+            'webflow-badge-icon',
+            'webflow-badge-text',
+            'd3e54v103j8qbb.cloudfront.net/img/webflow-badge',
+            'd1otoma47x30pg.cloudfront.net/img/webflow-badge'
+        ]
+        
+        for img in soup.find_all('img'):
+            if 'src' in img.attrs:
+                for pattern in badge_image_patterns:
+                    if pattern in img['src']:
+                        logger.info(f"Removing badge image: {img['src']}")
+                        img.decompose()
+                        break
+        
+        return soup
+    
     def process_html(self, soup, base_url, output_path):
         """
         Process HTML content to fix links and find assets to download.
@@ -133,6 +220,18 @@ class Reflow:
         Returns:
             BeautifulSoup: The processed BeautifulSoup object
         """
+        # Remove Webflow badge from HTML
+        soup = self.remove_webflow_badge_from_html(soup)
+        
+        # Remove any existing Webflow badges
+        for badge in soup.select('.w-webflow-badge'):
+            badge.decompose()
+        
+        # Remove any script tags that only contain badge-related code
+        for script in soup.find_all('script'):
+            if script.string and ('webflow-badge' in script.string or 'createBadge' in script.string):
+                script.decompose()
+        
         # Get the relative path from the output file to the root
         rel_path_to_root = os.path.relpath('/', os.path.dirname('/' + os.path.relpath(output_path, self.working_dir)))
         if rel_path_to_root == '.':
@@ -164,15 +263,23 @@ class Reflow:
             src = img_tag['src']
             absolute_url = urljoin(base_url, src)
             
+            # Skip Webflow badge images
+            if 'webflow-badge' in src:
+                img_tag.decompose()
+                continue
+            
             # Extract path and filename
             parsed_url = urlparse(absolute_url)
             path = parsed_url.path.lstrip('/')
             
+            # Sanitize the filename
+            sanitized_filename = self.sanitize_filename(os.path.basename(path))
+            
             # Add to assets to download
-            self.assets_to_download.add((absolute_url, os.path.join('images', os.path.basename(path))))
+            self.assets_to_download.add((absolute_url, os.path.join('images', sanitized_filename)))
             
             # Update src attribute
-            img_tag['src'] = f"{rel_path_to_root}images/{os.path.basename(path)}"
+            img_tag['src'] = f"{rel_path_to_root}images/{sanitized_filename}"
             
             # Process srcset if it exists
             if img_tag.get('srcset'):
@@ -185,11 +292,14 @@ class Reflow:
                         parsed_src_url = urlparse(absolute_src_url)
                         src_path = parsed_src_url.path.lstrip('/')
                         
+                        # Sanitize the filename
+                        sanitized_src_filename = self.sanitize_filename(os.path.basename(src_path))
+                        
                         # Add to assets to download
-                        self.assets_to_download.add((absolute_src_url, os.path.join('images', os.path.basename(src_path))))
+                        self.assets_to_download.add((absolute_src_url, os.path.join('images', sanitized_src_filename)))
                         
                         # Update srcset part
-                        src_parts[0] = f"{rel_path_to_root}images/{os.path.basename(src_path)}"
+                        src_parts[0] = f"{rel_path_to_root}images/{sanitized_src_filename}"
                         srcset_parts.append(' '.join(src_parts))
                 
                 img_tag['srcset'] = ', '.join(srcset_parts)
@@ -204,11 +314,14 @@ class Reflow:
                 parsed_url = urlparse(absolute_url)
                 path = parsed_url.path.lstrip('/')
                 
+                # Sanitize the filename
+                sanitized_filename = self.sanitize_filename(os.path.basename(path))
+                
                 # Add to assets to download
-                self.assets_to_download.add((absolute_url, os.path.join('css', os.path.basename(path))))
+                self.assets_to_download.add((absolute_url, os.path.join('css', sanitized_filename)))
                 
                 # Update href attribute
-                link_tag['href'] = f"{rel_path_to_root}css/{os.path.basename(path)}"
+                link_tag['href'] = f"{rel_path_to_root}css/{sanitized_filename}"
         
         # Process JavaScript files
         for script_tag in soup.find_all('script', src=True):
@@ -219,11 +332,14 @@ class Reflow:
             parsed_url = urlparse(absolute_url)
             path = parsed_url.path.lstrip('/')
             
+            # Sanitize the filename
+            sanitized_filename = self.sanitize_filename(os.path.basename(path))
+            
             # Add to assets to download
-            self.assets_to_download.add((absolute_url, os.path.join('js', os.path.basename(path))))
+            self.assets_to_download.add((absolute_url, os.path.join('js', sanitized_filename)))
             
             # Update src attribute
-            script_tag['src'] = f"{rel_path_to_root}js/{os.path.basename(path)}"
+            script_tag['src'] = f"{rel_path_to_root}js/{sanitized_filename}"
         
         # Process inline styles with background images
         for tag in soup.find_all(style=True):
@@ -235,11 +351,14 @@ class Reflow:
                 parsed_url = urlparse(absolute_url)
                 path = parsed_url.path.lstrip('/')
                 
+                # Sanitize the filename
+                sanitized_filename = self.sanitize_filename(os.path.basename(path))
+                
                 # Add to assets to download
-                self.assets_to_download.add((absolute_url, os.path.join('images', os.path.basename(path))))
+                self.assets_to_download.add((absolute_url, os.path.join('images', sanitized_filename)))
                 
                 # Update style attribute
-                style = style.replace(bg_image, f"{rel_path_to_root}images/{os.path.basename(path)}")
+                style = style.replace(bg_image, f"{rel_path_to_root}images/{sanitized_filename}")
             
             tag['style'] = style
         
@@ -254,11 +373,14 @@ class Reflow:
                 parsed_url = urlparse(absolute_url)
                 path = parsed_url.path.lstrip('/')
                 
+                # Sanitize the filename
+                sanitized_filename = self.sanitize_filename(os.path.basename(path))
+                
                 # Add to assets to download
-                self.assets_to_download.add((absolute_url, os.path.join('images', os.path.basename(path))))
+                self.assets_to_download.add((absolute_url, os.path.join('images', sanitized_filename)))
                 
                 # Update href attribute
-                favicon_tag['href'] = f"{rel_path_to_root}images/{os.path.basename(path)}"
+                favicon_tag['href'] = f"{rel_path_to_root}images/{sanitized_filename}"
         
         return soup
     
@@ -297,15 +419,94 @@ class Reflow:
             parsed_url = urlparse(absolute_url)
             path = parsed_url.path.lstrip('/')
             
+            # Sanitize the filename
+            sanitized_filename = self.sanitize_filename(os.path.basename(path))
+            
             # Add to assets to download
-            self.assets_to_download.add((absolute_url, os.path.join('images', os.path.basename(path))))
+            self.assets_to_download.add((absolute_url, os.path.join('images', sanitized_filename)))
             
             # Update URL in CSS
-            css_content = css_content.replace(f'url({url_pattern})', f'url({rel_path_to_root}images/{os.path.basename(path)})')
-            css_content = css_content.replace(f"url('{url_pattern}')", f"url('{rel_path_to_root}images/{os.path.basename(path)}')")
-            css_content = css_content.replace(f'url("{url_pattern}")', f'url("{rel_path_to_root}images/{os.path.basename(path)}")')
+            css_content = css_content.replace(f'url({url_pattern})', f'url({rel_path_to_root}images/{sanitized_filename})')
+            css_content = css_content.replace(f"url('{url_pattern}')", f"url('{rel_path_to_root}images/{sanitized_filename}')")
+            css_content = css_content.replace(f'url("{url_pattern}")', f'url("{rel_path_to_root}images/{sanitized_filename}")')
         
         return css_content
+    
+    def process_javascript(self, js_content):
+        """
+        Process JavaScript content to remove Webflow branding.
+        
+        Args:
+            js_content (str): The JavaScript content to process
+            
+        Returns:
+            str: The processed JavaScript content
+        """
+        logger.info("Processing JavaScript to remove Webflow badge...")
+        
+        # Check if this is the webflow.js file (contains badge code)
+        if 'webflow-badge' in js_content or 'createBadge' in js_content:
+            logger.info("Found Webflow badge code, removing...")
+            
+            # 1. Find and remove the createBadge function
+            # This is a more precise approach using string indices
+            create_badge_start = js_content.find("function createBadge()")
+            if create_badge_start != -1:
+                # Find the end of the function (closing brace)
+                brace_count = 0
+                create_badge_end = create_badge_start
+                
+                # Start after "function createBadge() {"
+                i = js_content.find("{", create_badge_start)
+                if i != -1:
+                    brace_count = 1
+                    i += 1
+                    
+                    # Find matching closing brace
+                    while i < len(js_content) and brace_count > 0:
+                        if js_content[i] == "{":
+                            brace_count += 1
+                        elif js_content[i] == "}":
+                            brace_count -= 1
+                            if brace_count == 0:
+                                create_badge_end = i + 1
+                                break
+                        i += 1
+                    
+                    # Remove the function
+                    if create_badge_end > create_badge_start:
+                        logger.info(f"Removing createBadge function from index {create_badge_start} to {create_badge_end}")
+                        js_content = js_content[:create_badge_start] + js_content[create_badge_end:]
+            
+            # 2. Remove any code that adds the badge to the page
+            # Look for patterns like: $body.append(createBadge());
+            badge_append_patterns = [
+                r'\$\([^)]*\)\.append\(createBadge\(\)\);',
+                r'\$body\.append\(createBadge\(\)\);',
+                r'body\.appendChild\(createBadge\(\)\);',
+                r'document\.body\.appendChild\(createBadge\(\)\);'
+            ]
+            
+            for pattern in badge_append_patterns:
+                js_content = re.sub(pattern, '', js_content)
+            
+            # 3. Remove any CSS related to the badge
+            badge_css_patterns = [
+                r'\.w-webflow-badge\s*\{[^}]*\}',
+                r'\.w-webflow-badge:hover\s*\{[^}]*\}'
+            ]
+            
+            for pattern in badge_css_patterns:
+                js_content = re.sub(pattern, '', js_content)
+            
+            # 4. Disable any code that might dynamically add the badge
+            # Replace any remaining references to createBadge with an empty function
+            if 'createBadge' in js_content:
+                js_content = js_content.replace('createBadge()', 'function(){return null;}()')
+            
+            logger.info("Webflow badge code removal complete")
+        
+        return js_content
     
     def download_asset(self, url_path_tuple):
         """
@@ -330,8 +531,17 @@ class Reflow:
             response = self.session.get(url, stream=True)
             response.raise_for_status()
             
+            # Ensure correct encoding detection for text-based assets
+            if not local_path.endswith(('.jpg', '.jpeg', '.png', '.gif', '.webp', '.svg', '.ico', '.ttf', '.woff', '.woff2', '.eot')):
+                # Try to detect encoding from content
+                if response.encoding is None or response.encoding == 'ISO-8859-1':
+                    response.encoding = response.apparent_encoding
+            
             # Add delay to avoid rate limiting
             time.sleep(self.delay)
+            
+            # Special handling for webflow.js file
+            is_webflow_js = 'webflow' in url.lower() and local_path.endswith('.js')
             
             with open(full_path, 'wb') as f:
                 for chunk in response.iter_content(chunk_size=8192):
@@ -339,13 +549,53 @@ class Reflow:
             
             # Process CSS files if enabled
             if self.process_css and local_path.startswith('css/') and local_path.endswith('.css'):
-                with open(full_path, 'r', encoding='utf-8', errors='ignore') as f:
-                    css_content = f.read()
+                try:
+                    # First try UTF-8
+                    with open(full_path, 'r', encoding='utf-8') as f:
+                        css_content = f.read()
+                except UnicodeDecodeError:
+                    # If UTF-8 fails, try to detect encoding
+                    import chardet
+                    with open(full_path, 'rb') as f:
+                        raw_data = f.read()
+                        detected = chardet.detect(raw_data)
+                        encoding = detected['encoding'] or 'utf-8'
+                    
+                    with open(full_path, 'r', encoding=encoding, errors='replace') as f:
+                        css_content = f.read()
                 
                 processed_css = self.process_css(css_content, url, full_path)
                 
                 with open(full_path, 'w', encoding='utf-8') as f:
                     f.write(processed_css)
+            
+            # Process JavaScript files
+            if local_path.startswith('js/') and local_path.endswith('.js'):
+                with open(full_path, 'r', encoding='utf-8', errors='ignore') as f:
+                    js_content = f.read()
+                
+                # Extra thorough processing for webflow.js
+                if is_webflow_js:
+                    logger.info("Applying special processing for webflow.js file")
+                    # Completely disable the badge creation
+                    js_content = js_content.replace("function createBadge()", "function createBadge() { return null; }")
+                    
+                    # Remove any code that appends the badge to the body
+                    badge_append_patterns = [
+                        r'\$\([\'"]body[\'"]\)\.append\(createBadge\(\)\);',
+                        r'\$body\.append\(createBadge\(\)\);',
+                        r'body\.appendChild\(createBadge\(\)\);',
+                        r'document\.body\.appendChild\(createBadge\(\)\);'
+                    ]
+                    
+                    for pattern in badge_append_patterns:
+                        js_content = re.sub(pattern, '', js_content)
+                
+                processed_js = self.process_javascript(js_content)
+                
+                with open(full_path, 'w', encoding='utf-8') as f:
+                    f.write(processed_js)
+                
         except Exception as e:
             logger.error(f"Error downloading {url}: {e}")
     
@@ -461,7 +711,8 @@ class Reflow:
             
             # Save the processed homepage
             with open(os.path.join(self.working_dir, 'index.html'), 'w', encoding='utf-8') as f:
-                f.write(str(soup))
+                # Use prettify with utf-8 encoding to preserve special characters
+                f.write(soup.prettify(formatter="html"))
             
             # Detect CMS collections
             self.detect_cms_collections(soup, self.base_url)
@@ -507,7 +758,8 @@ class Reflow:
                     
                     # Save the processed page
                     with open(output_path, 'w', encoding='utf-8') as f:
-                        f.write(str(soup))
+                        # Use prettify with utf-8 encoding to preserve special characters
+                        f.write(soup.prettify(formatter="html"))
                     
                     # Detect CMS collections
                     self.detect_cms_collections(soup, url)
@@ -525,12 +777,50 @@ class Reflow:
                         
                         # Save the processed page
                         with open(output_path, 'w', encoding='utf-8') as f:
-                            f.write(str(soup))
+                            # Use prettify with utf-8 encoding to preserve special characters
+                            f.write(soup.prettify(formatter="html"))
             
             # Download all assets
-            logger.info(f"Downloading {len(self.assets_to_download)} assets...")
-            with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
-                executor.map(self.download_asset, self.assets_to_download)
+            if self.assets_to_download:
+                logger.info(f"Downloading {len(self.assets_to_download)} assets...")
+                with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
+                    executor.map(self.download_asset, self.assets_to_download)
+            
+            # Post-processing: Final pass to ensure all webflow.js files are properly modified
+            logger.info("Performing final pass to remove Webflow badge...")
+            for root, dirs, files in os.walk(self.working_dir):
+                for file in files:
+                    if file.lower().startswith('webflow') and file.lower().endswith('.js'):
+                        js_path = os.path.join(root, file)
+                        logger.info(f"Final pass: Processing {js_path}")
+                        try:
+                            with open(js_path, 'r', encoding='utf-8', errors='ignore') as f:
+                                js_content = f.read()
+                            
+                            # Direct replacement of badge code
+                            if 'function createBadge()' in js_content:
+                                logger.info(f"Found createBadge function in {file}, replacing with empty function")
+                                js_content = js_content.replace(
+                                    "function createBadge()",
+                                    "function createBadge() { return null; }"
+                                )
+                                
+                                # Also remove any code that appends the badge
+                                badge_append_patterns = [
+                                    r'\$\([\'"]body[\'"]\)\.append\(createBadge\(\)\);',
+                                    r'\$body\.append\(createBadge\(\)\);',
+                                    r'body\.appendChild\(createBadge\(\)\);',
+                                    r'document\.body\.appendChild\(createBadge\(\)\);',
+                                    r'[\w$]+\.append\(createBadge\(\)\);'
+                                ]
+                                
+                                for pattern in badge_append_patterns:
+                                    js_content = re.sub(pattern, '', js_content)
+                                
+                                with open(js_path, 'w', encoding='utf-8') as f:
+                                    f.write(js_content)
+                        except Exception as e:
+                            logger.error(f"Error processing {js_path}: {e}")
             
             # Save CMS pages info if enabled
             if self.process_cms and self.cms_pages:

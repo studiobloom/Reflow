@@ -2,4 +2,5 @@ requests==2.31.0
 beautifulsoup4==4.12.2
 argparse==1.4.0
 lxml==4.9.3
-customtkinter==5.2.2 
+customtkinter==5.2.2
+chardet==5.1.0 

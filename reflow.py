@@ -84,6 +84,34 @@ class Reflow:
         # Create working directory
         os.makedirs(self.working_dir, exist_ok=True)
     
+    def sanitize_filename(self, filename):
+        """
+        Sanitize a filename by decoding URL-encoded characters and removing/replacing invalid characters.
+        
+        Args:
+            filename (str): The filename to sanitize
+            
+        Returns:
+            str: The sanitized filename
+        """
+        # First, URL-decode the filename to handle percent-encoded characters
+        decoded_filename = unquote(filename)
+        
+        # Replace problematic characters with underscores
+        # This includes characters that are not allowed in filenames on various operating systems
+        invalid_chars = r'[<>:"/\\|?*\x00-\x1F]'
+        sanitized = re.sub(invalid_chars, '_', decoded_filename)
+        
+        # Replace spaces with underscores for better compatibility
+        sanitized = sanitized.replace(' ', '_')
+        
+        # Ensure the filename isn't too long (max 255 characters)
+        if len(sanitized) > 255:
+            name, ext = os.path.splitext(sanitized)
+            sanitized = name[:255-len(ext)] + ext
+            
+        return sanitized
+    
     def download_page(self, url, output_path=None):
         """
         Download a page from the Webflow site.
@@ -107,6 +135,11 @@ class Reflow:
             
             # Add delay to avoid rate limiting
             time.sleep(self.delay)
+            
+            # Ensure correct encoding detection
+            if response.encoding is None or response.encoding == 'ISO-8859-1':
+                # Try to detect encoding from content
+                response.encoding = response.apparent_encoding
             
             html_content = response.text
             soup = BeautifulSoup(html_content, 'html.parser')
@@ -239,11 +272,14 @@ class Reflow:
             parsed_url = urlparse(absolute_url)
             path = parsed_url.path.lstrip('/')
             
+            # Sanitize the filename
+            sanitized_filename = self.sanitize_filename(os.path.basename(path))
+            
             # Add to assets to download
-            self.assets_to_download.add((absolute_url, os.path.join('images', os.path.basename(path))))
+            self.assets_to_download.add((absolute_url, os.path.join('images', sanitized_filename)))
             
             # Update src attribute
-            img_tag['src'] = f"{rel_path_to_root}images/{os.path.basename(path)}"
+            img_tag['src'] = f"{rel_path_to_root}images/{sanitized_filename}"
             
             # Process srcset if it exists
             if img_tag.get('srcset'):
@@ -256,11 +292,14 @@ class Reflow:
                         parsed_src_url = urlparse(absolute_src_url)
                         src_path = parsed_src_url.path.lstrip('/')
                         
+                        # Sanitize the filename
+                        sanitized_src_filename = self.sanitize_filename(os.path.basename(src_path))
+                        
                         # Add to assets to download
-                        self.assets_to_download.add((absolute_src_url, os.path.join('images', os.path.basename(src_path))))
+                        self.assets_to_download.add((absolute_src_url, os.path.join('images', sanitized_src_filename)))
                         
                         # Update srcset part
-                        src_parts[0] = f"{rel_path_to_root}images/{os.path.basename(src_path)}"
+                        src_parts[0] = f"{rel_path_to_root}images/{sanitized_src_filename}"
                         srcset_parts.append(' '.join(src_parts))
                 
                 img_tag['srcset'] = ', '.join(srcset_parts)
@@ -275,11 +314,14 @@ class Reflow:
                 parsed_url = urlparse(absolute_url)
                 path = parsed_url.path.lstrip('/')
                 
+                # Sanitize the filename
+                sanitized_filename = self.sanitize_filename(os.path.basename(path))
+                
                 # Add to assets to download
-                self.assets_to_download.add((absolute_url, os.path.join('css', os.path.basename(path))))
+                self.assets_to_download.add((absolute_url, os.path.join('css', sanitized_filename)))
                 
                 # Update href attribute
-                link_tag['href'] = f"{rel_path_to_root}css/{os.path.basename(path)}"
+                link_tag['href'] = f"{rel_path_to_root}css/{sanitized_filename}"
         
         # Process JavaScript files
         for script_tag in soup.find_all('script', src=True):
@@ -290,11 +332,14 @@ class Reflow:
             parsed_url = urlparse(absolute_url)
             path = parsed_url.path.lstrip('/')
             
+            # Sanitize the filename
+            sanitized_filename = self.sanitize_filename(os.path.basename(path))
+            
             # Add to assets to download
-            self.assets_to_download.add((absolute_url, os.path.join('js', os.path.basename(path))))
+            self.assets_to_download.add((absolute_url, os.path.join('js', sanitized_filename)))
             
             # Update src attribute
-            script_tag['src'] = f"{rel_path_to_root}js/{os.path.basename(path)}"
+            script_tag['src'] = f"{rel_path_to_root}js/{sanitized_filename}"
         
         # Process inline styles with background images
         for tag in soup.find_all(style=True):
@@ -306,11 +351,14 @@ class Reflow:
                 parsed_url = urlparse(absolute_url)
                 path = parsed_url.path.lstrip('/')
                 
+                # Sanitize the filename
+                sanitized_filename = self.sanitize_filename(os.path.basename(path))
+                
                 # Add to assets to download
-                self.assets_to_download.add((absolute_url, os.path.join('images', os.path.basename(path))))
+                self.assets_to_download.add((absolute_url, os.path.join('images', sanitized_filename)))
                 
                 # Update style attribute
-                style = style.replace(bg_image, f"{rel_path_to_root}images/{os.path.basename(path)}")
+                style = style.replace(bg_image, f"{rel_path_to_root}images/{sanitized_filename}")
             
             tag['style'] = style
         
@@ -325,11 +373,14 @@ class Reflow:
                 parsed_url = urlparse(absolute_url)
                 path = parsed_url.path.lstrip('/')
                 
+                # Sanitize the filename
+                sanitized_filename = self.sanitize_filename(os.path.basename(path))
+                
                 # Add to assets to download
-                self.assets_to_download.add((absolute_url, os.path.join('images', os.path.basename(path))))
+                self.assets_to_download.add((absolute_url, os.path.join('images', sanitized_filename)))
                 
                 # Update href attribute
-                favicon_tag['href'] = f"{rel_path_to_root}images/{os.path.basename(path)}"
+                favicon_tag['href'] = f"{rel_path_to_root}images/{sanitized_filename}"
         
         return soup
     
@@ -368,13 +419,16 @@ class Reflow:
             parsed_url = urlparse(absolute_url)
             path = parsed_url.path.lstrip('/')
             
+            # Sanitize the filename
+            sanitized_filename = self.sanitize_filename(os.path.basename(path))
+            
             # Add to assets to download
-            self.assets_to_download.add((absolute_url, os.path.join('images', os.path.basename(path))))
+            self.assets_to_download.add((absolute_url, os.path.join('images', sanitized_filename)))
             
             # Update URL in CSS
-            css_content = css_content.replace(f'url({url_pattern})', f'url({rel_path_to_root}images/{os.path.basename(path)})')
-            css_content = css_content.replace(f"url('{url_pattern}')", f"url('{rel_path_to_root}images/{os.path.basename(path)}')")
-            css_content = css_content.replace(f'url("{url_pattern}")', f'url("{rel_path_to_root}images/{os.path.basename(path)}")')
+            css_content = css_content.replace(f'url({url_pattern})', f'url({rel_path_to_root}images/{sanitized_filename})')
+            css_content = css_content.replace(f"url('{url_pattern}')", f"url('{rel_path_to_root}images/{sanitized_filename}')")
+            css_content = css_content.replace(f'url("{url_pattern}")', f'url("{rel_path_to_root}images/{sanitized_filename}")')
         
         return css_content
     
@@ -477,6 +531,12 @@ class Reflow:
             response = self.session.get(url, stream=True)
             response.raise_for_status()
             
+            # Ensure correct encoding detection for text-based assets
+            if not local_path.endswith(('.jpg', '.jpeg', '.png', '.gif', '.webp', '.svg', '.ico', '.ttf', '.woff', '.woff2', '.eot')):
+                # Try to detect encoding from content
+                if response.encoding is None or response.encoding == 'ISO-8859-1':
+                    response.encoding = response.apparent_encoding
+            
             # Add delay to avoid rate limiting
             time.sleep(self.delay)
             
@@ -489,8 +549,20 @@ class Reflow:
             
             # Process CSS files if enabled
             if self.process_css and local_path.startswith('css/') and local_path.endswith('.css'):
-                with open(full_path, 'r', encoding='utf-8', errors='ignore') as f:
-                    css_content = f.read()
+                try:
+                    # First try UTF-8
+                    with open(full_path, 'r', encoding='utf-8') as f:
+                        css_content = f.read()
+                except UnicodeDecodeError:
+                    # If UTF-8 fails, try to detect encoding
+                    import chardet
+                    with open(full_path, 'rb') as f:
+                        raw_data = f.read()
+                        detected = chardet.detect(raw_data)
+                        encoding = detected['encoding'] or 'utf-8'
+                    
+                    with open(full_path, 'r', encoding=encoding, errors='replace') as f:
+                        css_content = f.read()
                 
                 processed_css = self.process_css(css_content, url, full_path)
                 
@@ -639,7 +711,8 @@ class Reflow:
             
             # Save the processed homepage
             with open(os.path.join(self.working_dir, 'index.html'), 'w', encoding='utf-8') as f:
-                f.write(str(soup))
+                # Use prettify with utf-8 encoding to preserve special characters
+                f.write(soup.prettify(formatter="html"))
             
             # Detect CMS collections
             self.detect_cms_collections(soup, self.base_url)
@@ -685,7 +758,8 @@ class Reflow:
                     
                     # Save the processed page
                     with open(output_path, 'w', encoding='utf-8') as f:
-                        f.write(str(soup))
+                        # Use prettify with utf-8 encoding to preserve special characters
+                        f.write(soup.prettify(formatter="html"))
                     
                     # Detect CMS collections
                     self.detect_cms_collections(soup, url)
@@ -703,7 +777,8 @@ class Reflow:
                         
                         # Save the processed page
                         with open(output_path, 'w', encoding='utf-8') as f:
-                            f.write(str(soup))
+                            # Use prettify with utf-8 encoding to preserve special characters
+                            f.write(soup.prettify(formatter="html"))
             
             # Download all assets
             if self.assets_to_download:

@@ -129,8 +129,16 @@ class Reflow:
         self.visited_urls.add(url)
         
         try:
+            # First try with the original URL
             logger.info(f"Downloading page: {url}")
             response = self.session.get(url)
+            
+            # If we get a 404 and the URL ends with .html, try without it
+            if response.status_code == 404 and url.endswith('.html'):
+                url_without_html = url[:-5]  # Remove .html
+                logger.info(f"404 encountered, retrying without .html: {url_without_html}")
+                response = self.session.get(url_without_html)
+            
             response.raise_for_status()
             
             # Add delay to avoid rate limiting
@@ -223,15 +231,6 @@ class Reflow:
         # Remove Webflow badge from HTML
         soup = self.remove_webflow_badge_from_html(soup)
         
-        # Remove any existing Webflow badges
-        for badge in soup.select('.w-webflow-badge'):
-            badge.decompose()
-        
-        # Remove any script tags that only contain badge-related code
-        for script in soup.find_all('script'):
-            if script.string and ('webflow-badge' in script.string or 'createBadge' in script.string):
-                script.decompose()
-        
         # Get the relative path from the output file to the root
         rel_path_to_root = os.path.relpath('/', os.path.dirname('/' + os.path.relpath(output_path, self.working_dir)))
         if rel_path_to_root == '.':
@@ -242,21 +241,51 @@ class Reflow:
             href = a_tag['href']
             if href.startswith('#') or href.startswith('mailto:') or href.startswith('tel:'):
                 continue
-                
-            absolute_url = urljoin(base_url, href)
-            parsed_url = urlparse(absolute_url)
             
-            # Only process links from the same domain
-            if parsed_url.netloc == self.domain:
-                # Convert to relative path
-                path = parsed_url.path
-                if not path:
-                    path = '/'
-                
-                if path == '/':
-                    a_tag['href'] = f"{rel_path_to_root}/"
+            # Handle file protocol URLs
+            if href.startswith('file:///'):
+                href = href.replace('file:///', '')
+                # Extract the path part after the drive letter or root
+                path_parts = href.split('/', 1)
+                if len(path_parts) > 1:
+                    href = '/' + path_parts[1]
                 else:
-                    a_tag['href'] = f"{rel_path_to_root}{path}"
+                    href = '/'
+            
+            # Convert absolute URLs to relative paths
+            try:
+                absolute_url = urljoin(base_url, href)
+                parsed_url = urlparse(absolute_url)
+                
+                # Only process links from the same domain or local file paths
+                if parsed_url.netloc == self.domain or not parsed_url.netloc:
+                    # Get the path component
+                    path = parsed_url.path
+                    if not path:
+                        path = '/'
+                    
+                    # Remove any domain prefix if present
+                    if path.startswith(self.domain):
+                        path = path[len(self.domain):]
+                    
+                    # Ensure path starts with /
+                    if not path.startswith('/'):
+                        path = '/' + path
+                    
+                    # Update href with relative path
+                    if path == '/':
+                        a_tag['href'] = f"{rel_path_to_root}/"
+                    else:
+                        # Remove leading slash for relative path
+                        relative_path = path.lstrip('/')
+                        if relative_path.endswith('/'):
+                            relative_path = relative_path[:-1]
+                        if not relative_path.endswith('.html'):
+                            relative_path += '.html'
+                        a_tag['href'] = f"{rel_path_to_root}{relative_path}"
+            except Exception as e:
+                logger.warning(f"Error processing link {href}: {e}")
+                continue
         
         # Process images
         for img_tag in soup.find_all('img', src=True):
@@ -701,7 +730,7 @@ class Reflow:
             logger.info(f"Starting crawl of {self.base_url}")
             
             # Download the homepage
-            soup, html_content = self.download_page(self.base_url, os.path.join(self.working_dir, 'index.html'))
+            soup, html_content = self.download_page(self.base_url)
             if not soup:
                 logger.error("Failed to download homepage. Exiting.")
                 return
@@ -711,7 +740,6 @@ class Reflow:
             
             # Save the processed homepage
             with open(os.path.join(self.working_dir, 'index.html'), 'w', encoding='utf-8') as f:
-                # Use prettify with utf-8 encoding to preserve special characters
                 f.write(soup.prettify(formatter="html"))
             
             # Detect CMS collections
@@ -737,28 +765,38 @@ class Reflow:
                     if path == '/':
                         continue
                     
-                    # Determine output path
-                    if path.endswith('/'):
-                        output_path = os.path.join(self.working_dir, path.lstrip('/'), 'index.html')
-                    else:
-                        # Check if it's a file or directory
-                        if '.' in os.path.basename(path):
-                            output_path = os.path.join(self.working_dir, path.lstrip('/'))
-                        else:
-                            output_path = os.path.join(self.working_dir, path.lstrip('/'), 'index.html')
+                    # Remove .html from the URL if present (we'll add it back for the output file)
+                    if path.endswith('.html'):
+                        path = path[:-5]
                     
-                    links_to_crawl.append((absolute_url, output_path))
+                    # Remove trailing slash if present
+                    if path.endswith('/'):
+                        path = path.rstrip('/')
+                    
+                    # Get the last part of the path as the filename
+                    filename = os.path.basename(path)
+                    if not filename:
+                        filename = path.strip('/')
+                    
+                    # Add .html to the output filename
+                    output_filename = filename + '.html'
+                    
+                    # Set output path directly in working directory
+                    output_path = os.path.join(self.working_dir, output_filename)
+                    
+                    # Use the URL without .html for crawling
+                    crawl_url = urljoin(self.base_url, path)
+                    links_to_crawl.append((crawl_url, output_path))
             
             # Crawl all links
             for url, output_path in links_to_crawl:
-                soup, html_content = self.download_page(url, output_path)
+                soup, html_content = self.download_page(url)
                 if soup:
                     # Process the page
                     soup = self.process_html(soup, url, output_path)
                     
                     # Save the processed page
                     with open(output_path, 'w', encoding='utf-8') as f:
-                        # Use prettify with utf-8 encoding to preserve special characters
                         f.write(soup.prettify(formatter="html"))
                     
                     # Detect CMS collections
@@ -769,15 +807,17 @@ class Reflow:
                 cms_paths = self.extract_cms_paths()
                 logger.info(f"Found {len(cms_paths)} CMS pages to crawl")
                 
-                for url, output_path in cms_paths:
-                    soup, html_content = self.download_page(url, output_path)
+                for url, cms_path in cms_paths:
+                    soup, html_content = self.download_page(url)
                     if soup:
                         # Process the page
-                        soup = self.process_html(soup, url, output_path)
+                        soup = self.process_html(soup, url, cms_path)
+                        
+                        # Create the directory if it doesn't exist
+                        os.makedirs(os.path.dirname(cms_path), exist_ok=True)
                         
                         # Save the processed page
-                        with open(output_path, 'w', encoding='utf-8') as f:
-                            # Use prettify with utf-8 encoding to preserve special characters
+                        with open(cms_path, 'w', encoding='utf-8') as f:
                             f.write(soup.prettify(formatter="html"))
             
             # Download all assets

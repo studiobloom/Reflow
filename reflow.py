@@ -235,6 +235,11 @@ class Reflow:
         rel_path_to_root = os.path.relpath('/', os.path.dirname('/' + os.path.relpath(output_path, self.working_dir)))
         if rel_path_to_root == '.':
             rel_path_to_root = ''
+        elif not rel_path_to_root.endswith('/'):
+            rel_path_to_root += '/'
+        
+        # Log the relative path for debugging
+        logger.info(f"Relative path to root for {output_path}: {rel_path_to_root}")
         
         # Process links
         for a_tag in soup.find_all('a', href=True):
@@ -274,13 +279,13 @@ class Reflow:
                     
                     # Update href with relative path
                     if path == '/':
-                        a_tag['href'] = f"{rel_path_to_root}/"
+                        a_tag['href'] = f"{rel_path_to_root}"
                     else:
                         # Remove leading slash for relative path
                         relative_path = path.lstrip('/')
                         if relative_path.endswith('/'):
                             relative_path = relative_path[:-1]
-                        if not relative_path.endswith('.html'):
+                        if not relative_path.endswith('.html') and not '.' in os.path.basename(relative_path):
                             relative_path += '.html'
                         a_tag['href'] = f"{rel_path_to_root}{relative_path}"
             except Exception as e:
@@ -432,6 +437,11 @@ class Reflow:
         rel_path_to_root = os.path.relpath('/', os.path.dirname('/' + os.path.relpath(css_path, self.working_dir)))
         if rel_path_to_root == '.':
             rel_path_to_root = ''
+        elif not rel_path_to_root.endswith('/'):
+            rel_path_to_root += '/'
+        
+        # Log the relative path for debugging
+        logger.info(f"CSS relative path to root for {css_path}: {rel_path_to_root}")
         
         # Find all url(...) patterns
         url_patterns = re.findall(r'url\([\'"]?([^\'"]+)[\'"]?\)', css_content)
@@ -719,6 +729,7 @@ class Reflow:
                         output_path = os.path.join(self.working_dir, collection_path.lstrip('/'), other_slug, 'index.html')
                         
                         cms_paths.append((other_url, output_path))
+                        logger.info(f"Added CMS path: {other_url} -> {output_path}")
         
         return cms_paths
     
@@ -730,7 +741,7 @@ class Reflow:
             logger.info(f"Starting crawl of {self.base_url}")
             
             # Download the homepage
-            soup, html_content = self.download_page(self.base_url)
+            soup, html_content = self.download_page(self.base_url, os.path.join(self.working_dir, 'index.html'))
             if not soup:
                 logger.error("Failed to download homepage. Exiting.")
                 return
@@ -740,7 +751,7 @@ class Reflow:
             
             # Save the processed homepage
             with open(os.path.join(self.working_dir, 'index.html'), 'w', encoding='utf-8') as f:
-                f.write(soup.prettify(formatter="html"))
+                f.write(str(soup))
             
             # Detect CMS collections
             self.detect_cms_collections(soup, self.base_url)
@@ -765,39 +776,28 @@ class Reflow:
                     if path == '/':
                         continue
                     
-                    # Remove .html from the URL if present (we'll add it back for the output file)
-                    if path.endswith('.html'):
-                        path = path[:-5]
-                    
-                    # Remove trailing slash if present
+                    # Determine output path
                     if path.endswith('/'):
-                        path = path.rstrip('/')
+                        output_path = os.path.join(self.working_dir, path.lstrip('/'), 'index.html')
+                    else:
+                        # Check if it's a file or directory
+                        if '.' in os.path.basename(path):
+                            output_path = os.path.join(self.working_dir, path.lstrip('/'))
+                        else:
+                            output_path = os.path.join(self.working_dir, path.lstrip('/'), 'index.html')
                     
-                    # Get the last part of the path as the filename
-                    filename = os.path.basename(path)
-                    if not filename:
-                        filename = path.strip('/')
-                    
-                    # Add .html to the output filename
-                    output_filename = filename + '.html'
-                    
-                    # Set output path directly in working directory
-                    output_path = os.path.join(self.working_dir, output_filename)
-                    
-                    # Use the URL without .html for crawling
-                    crawl_url = urljoin(self.base_url, path)
-                    links_to_crawl.append((crawl_url, output_path))
+                    links_to_crawl.append((absolute_url, output_path))
             
             # Crawl all links
             for url, output_path in links_to_crawl:
-                soup, html_content = self.download_page(url)
+                soup, html_content = self.download_page(url, output_path)
                 if soup:
                     # Process the page
                     soup = self.process_html(soup, url, output_path)
                     
                     # Save the processed page
                     with open(output_path, 'w', encoding='utf-8') as f:
-                        f.write(soup.prettify(formatter="html"))
+                        f.write(str(soup))
                     
                     # Detect CMS collections
                     self.detect_cms_collections(soup, url)
@@ -807,18 +807,15 @@ class Reflow:
                 cms_paths = self.extract_cms_paths()
                 logger.info(f"Found {len(cms_paths)} CMS pages to crawl")
                 
-                for url, cms_path in cms_paths:
-                    soup, html_content = self.download_page(url)
+                for url, output_path in cms_paths:
+                    soup, html_content = self.download_page(url, output_path)
                     if soup:
                         # Process the page
-                        soup = self.process_html(soup, url, cms_path)
-                        
-                        # Create the directory if it doesn't exist
-                        os.makedirs(os.path.dirname(cms_path), exist_ok=True)
+                        soup = self.process_html(soup, url, output_path)
                         
                         # Save the processed page
-                        with open(cms_path, 'w', encoding='utf-8') as f:
-                            f.write(soup.prettify(formatter="html"))
+                        with open(output_path, 'w', encoding='utf-8') as f:
+                            f.write(str(soup))
             
             # Download all assets
             if self.assets_to_download:

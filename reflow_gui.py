@@ -8,6 +8,21 @@ import os
 import sys
 import logging
 from reflow import Reflow
+from tkinter import ttk
+
+# Color constants
+PRIMARY_COLOR = "#6189ff"  # Main blue color
+PRIMARY_HOVER = "#4f6ecc"  # Darker blue for hover states (20% darker)
+
+def get_resource_path(relative_path):
+    """Get absolute path to resource, works for dev and for PyInstaller"""
+    try:
+        # PyInstaller creates a temp folder and stores path in _MEIPASS
+        base_path = sys._MEIPASS
+    except Exception:
+        base_path = os.path.dirname(os.path.abspath(__file__))
+    
+    return os.path.join(base_path, relative_path)
 
 class ToolTip(object):
     """Create a tooltip for a given widget"""
@@ -29,6 +44,19 @@ class ToolTip(object):
         self.tooltip.wm_overrideredirect(True)
         self.tooltip.wm_geometry(f"+{x}+{y}")
         
+        # Try to set icon for tooltip window
+        try:
+            # Get icon path from parent window if available
+            parent = self.widget.winfo_toplevel()
+            if hasattr(parent, 'get_icon_path') and callable(parent.get_icon_path):
+                icon_path = parent.get_icon_path()
+            else:
+                icon_path = get_resource_path("reflow.ico")
+            self.tooltip.iconbitmap(icon_path)
+        except:
+            # Ignore errors as tooltip windows may not support icons in all cases
+            pass
+        
         # Create tooltip label
         label = tk.Label(
             self.tooltip,
@@ -37,7 +65,7 @@ class ToolTip(object):
             background="#2b2b2b",
             foreground="#ffffff",
             relief=tk.SOLID,
-            borderwidth=1,
+            borderwidth=0,
             font=("Segoe UI", 9)
         )
         label.pack()
@@ -47,13 +75,25 @@ class ToolTip(object):
             self.tooltip.destroy()
             self.tooltip = None
 
-class ReflowGUI:
+class ReflowGUI(ctk.CTk):
     def __init__(self):
         """Initialize the GUI"""
-        self.root = ctk.CTk()
-        self.root.title("Reflow - Webflow Site Exporter")
-        self.root.geometry("800x700")
-        self.root.minsize(800, 700)
+        super().__init__()
+        
+        self.title("Reflow - Webflow Site Exporter")
+        self.geometry("800x700")
+        self.minsize(800, 700)
+        
+        # Set the application icon for all windows
+        self.icon_path = get_resource_path("reflow.ico")
+        try:
+            if os.path.exists(self.icon_path):
+                self.iconbitmap(self.icon_path)
+                # Set icon for all future toplevel windows
+                self.tk.call('wm', 'iconbitmap', self._w, self.icon_path)
+        except Exception as e:
+            print(f"Failed to set icon: {str(e)}")  # Add debug print
+            pass  # Ignore if icon setting fails
         
         # Configure the appearance
         ctk.set_appearance_mode("dark")
@@ -66,7 +106,7 @@ class ReflowGUI:
         self.small_font = ("Segoe UI", 10)
         
         # URL Input Frame
-        url_frame = ctk.CTkFrame(self.root, corner_radius=0)
+        url_frame = ctk.CTkFrame(self, corner_radius=0)
         url_frame.pack(fill=tk.X, padx=15, pady=(15, 10))
         
         url_label = ctk.CTkLabel(
@@ -90,7 +130,7 @@ class ReflowGUI:
         ToolTip(self.url_entry, "Enter the URL of your Webflow site\nExample: https://your-site.webflow.io")
         
         # Settings frame
-        settings_frame = ctk.CTkFrame(self.root, corner_radius=0)
+        settings_frame = ctk.CTkFrame(self, corner_radius=0)
         settings_frame.pack(fill=tk.X, padx=15, pady=(0, 10))
         
         # Output Directory
@@ -126,7 +166,9 @@ class ReflowGUI:
             width=70,
             height=28,
             font=self.button_font,
-            corner_radius=0
+            corner_radius=0,
+            fg_color=PRIMARY_COLOR,
+            hover_color=PRIMARY_HOVER
         )
         browse_button.pack(side=tk.LEFT)
         
@@ -146,41 +188,41 @@ class ReflowGUI:
         options_frame.pack(fill=tk.X, padx=10, pady=(0, 8))
         
         self.cms_var = tk.BooleanVar(value=True)
-        cms_check = ctk.CTkCheckBox(
+        cms_check = ctk.CTkSwitch(
             options_frame,
             text="Process CMS Collections",
             variable=self.cms_var,
             font=self.label_font,
-            border_width=1,
-            corner_radius=0,
-            hover_color="#1f6aaa"
+            button_color=PRIMARY_COLOR,
+            button_hover_color=PRIMARY_HOVER,
+            progress_color=PRIMARY_COLOR
         )
         cms_check.pack(side=tk.LEFT, padx=10, pady=2)
         ToolTip(cms_check, "Enable to process and download CMS collection pages\nRequired if your site uses dynamic collections")
         
         self.css_var = tk.BooleanVar(value=False)
-        css_check = ctk.CTkCheckBox(
+        css_check = ctk.CTkSwitch(
             options_frame,
             text="Retain Original Asset URLs",
             variable=self.css_var,
             font=self.label_font,
-            border_width=1,
-            corner_radius=0,
-            hover_color="#1f6aaa"
+            button_color=PRIMARY_COLOR,
+            button_hover_color=PRIMARY_HOVER,
+            progress_color=PRIMARY_COLOR
         )
         css_check.pack(side=tk.LEFT, padx=10, pady=2)
         ToolTip(css_check, "Keep original URLs for assets in CSS files\nEnable if you want assets to load from Webflow servers")
         
         self.zip_var = tk.BooleanVar(value=True)
-        zip_check = ctk.CTkCheckBox(
+        zip_check = ctk.CTkSwitch(
             options_frame,
             text="Create ZIP Archive",
             variable=self.zip_var,
             command=self.toggle_zip_mode,
             font=self.label_font,
-            border_width=1,
-            corner_radius=0,
-            hover_color="#1f6aaa"
+            button_color=PRIMARY_COLOR,
+            button_hover_color=PRIMARY_HOVER,
+            progress_color=PRIMARY_COLOR
         )
         zip_check.pack(side=tk.LEFT, padx=10, pady=2)
         ToolTip(zip_check, "Create a ZIP file containing the exported site\nRecommended for easier file handling")
@@ -217,7 +259,10 @@ class ReflowGUI:
             width=200,
             height=16,
             corner_radius=0,
-            border_width=1
+            border_width=1,
+            progress_color=PRIMARY_COLOR,
+            button_color=PRIMARY_COLOR,
+            button_hover_color=PRIMARY_HOVER
         )
         self.workers_slider.pack(side=tk.LEFT, padx=10)
         self.workers_slider.set(5)
@@ -251,7 +296,10 @@ class ReflowGUI:
             width=200,
             height=16,
             corner_radius=0,
-            border_width=1
+            border_width=1,
+            progress_color=PRIMARY_COLOR,
+            button_color=PRIMARY_COLOR,
+            button_hover_color=PRIMARY_HOVER
         )
         self.delay_slider.pack(side=tk.LEFT, padx=10)
         self.delay_slider.set(0.2)
@@ -266,45 +314,65 @@ class ReflowGUI:
         
         # Export button
         self.export_button = ctk.CTkButton(
-            self.root,
+            self,
             text="Export Site",
             command=self.start_export,
             height=32,
             font=("Segoe UI", 12, "bold"),
             corner_radius=0,
             border_width=0,
-            fg_color="#1f6aaa",
-            hover_color="#1c5c94"
+            fg_color=PRIMARY_COLOR,
+            hover_color=PRIMARY_HOVER
         )
-        self.export_button.pack(pady=(5, 15), padx=15)
+        self.export_button.pack(pady=(5, 10), padx=15)
         
         # Preview/Log Area
-        preview_label_frame = ctk.CTkFrame(self.root, fg_color="transparent", corner_radius=0)
-        preview_label_frame.pack(fill=tk.X, padx=15, pady=(0, 5))
+        self.preview_frame = ctk.CTkFrame(self, corner_radius=0)
+        self.preview_frame.pack(fill=tk.BOTH, expand=True, padx=15, pady=(0, 10))
+        
+        # Header frame for label
+        header_frame = ctk.CTkFrame(self.preview_frame, fg_color="transparent", corner_radius=0)
+        header_frame.pack(fill=tk.X, padx=10, pady=5)
         
         self.preview_label = ctk.CTkLabel(
-            preview_label_frame,
+            header_frame,
             text="Export Progress:",
             font=self.header_font
         )
-        self.preview_label.pack(anchor=tk.W)
+        self.preview_label.pack(side=tk.LEFT, padx=5)
         
-        self.preview_frame = ctk.CTkFrame(self.root, corner_radius=0)
-        self.preview_frame.pack(fill=tk.BOTH, expand=True, padx=15, pady=(0, 10))
+        # Container for the log
+        self.log_container = ctk.CTkFrame(self.preview_frame, fg_color="transparent", corner_radius=0)
+        self.log_container.pack(fill=tk.BOTH, expand=True, padx=1, pady=(0, 1))
         
-        self.preview_text = scrolledtext.ScrolledText(
-            self.preview_frame,
+        # Create text widget and scrollbar
+        self.preview_text = tk.Text(
+            self.log_container,
             wrap=tk.WORD,
             height=10,
             bg='#1a1a1a',
             fg='#e6e6e6',
             font=("Consolas", 10),
-            border=0
+            border=0,
+            highlightthickness=0
         )
-        self.preview_text.pack(fill=tk.BOTH, expand=True, padx=1, pady=1)
+        self.preview_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        
+        # Create and configure CTkScrollbar
+        scrollbar = ctk.CTkScrollbar(
+            self.log_container,
+            command=self.preview_text.yview,
+            button_color="#404040",
+            button_hover_color="#505050",
+            fg_color="#2b2b2b"
+        )
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        
+        # Connect textbox scroll event to CTk scrollbar
+        self.preview_text.configure(yscrollcommand=scrollbar.set)
         
         # Status bar
-        status_frame = ctk.CTkFrame(self.root, fg_color="transparent", corner_radius=0, height=25)
+        status_frame = ctk.CTkFrame(self, fg_color="transparent", corner_radius=0, height=25)
         status_frame.pack(fill=tk.X, side=tk.BOTTOM, padx=15, pady=(0, 15))
         
         self.status_label = ctk.CTkLabel(
@@ -328,18 +396,38 @@ class ReflowGUI:
                 self.output_entry.insert(0, current)
     
     def browse_output_directory(self):
+        # Set the parent window for the dialog to ensure icon inheritance
+        parent = self
+        
         if self.zip_var.get():
+            # Create a temporary toplevel to set the icon for the file dialog
+            temp = tk.Toplevel(parent)
+            temp.withdraw()  # Hide the temporary window
+            temp.iconbitmap(self.icon_path)  # Set the icon
+            
             filename = filedialog.asksaveasfilename(
+                parent=temp,
                 title="Save Export As",
                 defaultextension=".zip",
                 filetypes=[("ZIP archives", "*.zip"), ("All files", "*.*")],
                 initialfile="webflow_export.zip"
             )
+            
+            temp.destroy()  # Clean up the temporary window
         else:
+            # Create a temporary toplevel to set the icon for the directory dialog
+            temp = tk.Toplevel(parent)
+            temp.withdraw()  # Hide the temporary window
+            temp.iconbitmap(self.icon_path)  # Set the icon
+            
             filename = filedialog.askdirectory(
+                parent=temp,
                 title="Select Export Location",
-                initialdir=os.path.abspath(self.output_entry.get())
+                initialdir=os.path.abspath(self.output_entry.get()) if self.output_entry.get() else os.getcwd()
             )
+            
+            temp.destroy()  # Clean up the temporary window
+            
         if filename:
             self.output_entry.delete(0, tk.END)
             self.output_entry.insert(0, filename)
@@ -413,8 +501,21 @@ class ReflowGUI:
             self.status_label.configure(text="Ready")
             self.export_button.configure(state="normal")
             
+    def get_icon_path(self):
+        """Helper method to get the icon path"""
+        return self.icon_path
+        
     def run(self):
-        self.root.mainloop()
+        # Set icon for all dialogs
+        self.createcommand('tk::dialog::file::ShowFileSelector', 
+                               lambda *args: self.tk.call('tk::dialog::file::ShowFileSelector', *args))
+        
+        # Set default icon for all toplevel windows
+        self.option_add('*Dialog.msg.font', self.label_font)
+        self.option_add('*Dialog.msg.wrapLength', '6i')
+        
+        # Start the main loop
+        self.mainloop()
 
 if __name__ == "__main__":
     app = ReflowGUI()

@@ -5,7 +5,7 @@ a = Analysis(
     ['reflow_gui.py'],
     pathex=[],
     binaries=[],
-    datas=[],
+    datas=[('reflow.ico', '.')],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},
@@ -35,5 +35,5 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon=['icon.ico'],
+    icon=['reflow.ico'],
 )

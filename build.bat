@@ -8,7 +8,7 @@ echo Installing requirements...
 pip install -r requirements.txt
 
 echo Building Reflow.exe...
-pyinstaller --onefile --noconsole --icon=icon.ico --name Reflow reflow_gui.py
+pyinstaller --onefile --noconsole --icon=reflow.ico --name Reflow --add-data "reflow.ico;." reflow_gui.py
 
 echo Build complete!
 echo Executable is located in the dist folder.

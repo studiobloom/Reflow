@@ -80,6 +80,23 @@ class ReflowGUI(ctk.CTk):
         """Initialize the GUI"""
         super().__init__()
         
+        # Set up logging handler for GUI
+        class TextHandler(logging.Handler):
+            def __init__(self, text_widget):
+                super().__init__()
+                self.text_widget = text_widget
+                
+            def emit(self, record):
+                msg = self.format(record)
+                self.text_widget.insert(tk.END, msg + '\n')
+                self.text_widget.see(tk.END)  # Auto-scroll to the bottom
+                
+                # Process any pending events to update the GUI
+                self.text_widget.update_idletasks()
+        
+        # Store the TextHandler class for later use
+        self.TextHandler = TextHandler
+        
         self.title("Reflow - Webflow Site Exporter")
         self.geometry("800x700")
         self.minsize(800, 700)
@@ -187,6 +204,20 @@ class ReflowGUI(ctk.CTk):
         options_frame = ctk.CTkFrame(processing_section, fg_color="transparent", corner_radius=0)
         options_frame.pack(fill=tk.X, padx=10, pady=(0, 8))
         
+        self.zip_var = tk.BooleanVar(value=True)
+        zip_check = ctk.CTkSwitch(
+            options_frame,
+            text="Create ZIP Archive",
+            variable=self.zip_var,
+            command=self.toggle_zip_mode,
+            font=self.label_font,
+            button_color=PRIMARY_COLOR,
+            button_hover_color=PRIMARY_HOVER,
+            progress_color=PRIMARY_COLOR
+        )
+        zip_check.pack(side=tk.LEFT, padx=10, pady=2)
+        ToolTip(zip_check, "Create a ZIP file containing the exported site\nRecommended for easier file handling")
+
         self.cms_var = tk.BooleanVar(value=True)
         cms_check = ctk.CTkSwitch(
             options_frame,
@@ -212,20 +243,6 @@ class ReflowGUI(ctk.CTk):
         )
         css_check.pack(side=tk.LEFT, padx=10, pady=2)
         ToolTip(css_check, "Keep original URLs for assets in CSS files\nEnable if you want assets to load from Webflow servers")
-        
-        self.zip_var = tk.BooleanVar(value=True)
-        zip_check = ctk.CTkSwitch(
-            options_frame,
-            text="Create ZIP Archive",
-            variable=self.zip_var,
-            command=self.toggle_zip_mode,
-            font=self.label_font,
-            button_color=PRIMARY_COLOR,
-            button_hover_color=PRIMARY_HOVER,
-            progress_color=PRIMARY_COLOR
-        )
-        zip_check.pack(side=tk.LEFT, padx=10, pady=2)
-        ToolTip(zip_check, "Create a ZIP file containing the exported site\nRecommended for easier file handling")
         
         # Performance Settings
         perf_section = ctk.CTkFrame(settings_frame, fg_color=("gray85", "gray17"), corner_radius=0)
@@ -358,6 +375,9 @@ class ReflowGUI(ctk.CTk):
         )
         self.preview_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         
+        # We'll set up the logging handler when needed, not at initialization
+        self.text_handler = None
+        
         # Create and configure CTkScrollbar
         scrollbar = ctk.CTkScrollbar(
             self.log_container,
@@ -399,6 +419,22 @@ class ReflowGUI(ctk.CTk):
         # Set the parent window for the dialog to ensure icon inheritance
         parent = self
         
+        # Get the URL to use for default filename
+        url = self.url_entry.get().strip()
+        default_filename = "webflow_export"
+        
+        if url:
+            try:
+                parsed_url = urlparse(url)
+                if parsed_url.netloc:
+                    domain = parsed_url.netloc
+                    # Remove webflow.io if present
+                    if domain.endswith('.webflow.io'):
+                        domain = domain.replace('.webflow.io', '')
+                    default_filename = domain
+            except:
+                pass  # Use default if parsing fails
+        
         if self.zip_var.get():
             # Create a temporary toplevel to set the icon for the file dialog
             temp = tk.Toplevel(parent)
@@ -410,7 +446,7 @@ class ReflowGUI(ctk.CTk):
                 title="Save Export As",
                 defaultextension=".zip",
                 filetypes=[("ZIP archives", "*.zip"), ("All files", "*.*")],
-                initialfile="webflow_export.zip"
+                initialfile=f"{default_filename}.zip"
             )
             
             temp.destroy()  # Clean up the temporary window
@@ -449,11 +485,38 @@ class ReflowGUI(ctk.CTk):
         # Validate output directory
         output_dir = self.output_entry.get().strip()
         if not output_dir:
-            self.preview_text.insert(tk.END, "Error: Please select an export location\n")
-            return
+            # Auto-generate output name based on the site URL
+            domain = parsed_url.netloc
+            # Remove webflow.io if present
+            if domain.endswith('.webflow.io'):
+                domain = domain.replace('.webflow.io', '')
+            
+            # Set default output location
+            if self.zip_var.get():
+                output_dir = os.path.join(os.path.expanduser('~'), 'Downloads', f"{domain}.zip")
+            else:
+                output_dir = os.path.join(os.path.expanduser('~'), 'Downloads', domain)
+            
+            # Update the output entry
+            self.output_entry.delete(0, tk.END)
+            self.output_entry.insert(0, output_dir)
             
         # Clear preview area
         self.preview_text.delete(1.0, tk.END)
+        
+        # Set up logging to GUI for this export
+        logger = logging.getLogger('reflow')
+        
+        # Remove any existing handlers
+        for handler in logger.handlers[:]:
+            if isinstance(handler, self.TextHandler):
+                logger.removeHandler(handler)
+        
+        # Create and add new handler
+        self.text_handler = self.TextHandler(self.preview_text)
+        self.text_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
+        logger.addHandler(self.text_handler)
+        
         self.preview_text.insert(tk.END, f"Starting export of {url}...\n")
         self.preview_text.insert(tk.END, f"Export location: {output_dir}\n")
         self.status_label.configure(text="Exporting...")
@@ -480,23 +543,43 @@ class ReflowGUI(ctk.CTk):
                 process_cms=self.cms_var.get(),
                 process_css=self.css_var.get(),
                 create_zip=self.zip_var.get(),
-                log_level=logging.INFO  # Always use normal logging
+                log_level=logging.DEBUG,  # Set default to DEBUG for verbose logging
+                log_file=None
             )
             
             # Start the export
             exporter.crawl_site()
             
-            self.preview_text.insert(tk.END, "\nExport completed successfully!\n")
+            # Remove the logging handler
+            logger = logging.getLogger('reflow')
+            if self.text_handler in logger.handlers:
+                logger.removeHandler(self.text_handler)
             
-            # Print summary
-            self.preview_text.insert(tk.END, "\nExport Summary:\n")
+            # Add the summary directly to the text widget
+            self.preview_text.insert(tk.END, "\n" + "-"*50 + "\n")
+            self.preview_text.insert(tk.END, "Export completed successfully!\n\n")
+            self.preview_text.insert(tk.END, "Export Summary:\n")
             self.preview_text.insert(tk.END, f"- Pages downloaded: {len(exporter.visited_urls)}\n")
             self.preview_text.insert(tk.END, f"- Assets downloaded: {len(exporter.assets_to_download)}\n")
             if hasattr(exporter, 'cms_pages'):
                 self.preview_text.insert(tk.END, f"- CMS collections detected: {len(exporter.cms_pages)}\n")
+            self.preview_text.insert(tk.END, f"\nExport saved to: {output_dir}\n")
+            
+            # Make sure to scroll to see the summary
+            self.preview_text.see(tk.END)
             
         except Exception as e:
+            # Remove the logging handler
+            logger = logging.getLogger('reflow')
+            if self.text_handler in logger.handlers:
+                logger.removeHandler(self.text_handler)
+                
+            self.preview_text.insert(tk.END, "\n" + "-"*50 + "\n")
             self.preview_text.insert(tk.END, f"Error during export: {str(e)}\n")
+            
+            # Make sure to scroll to see the error
+            self.preview_text.see(tk.END)
+            
         finally:
             self.status_label.configure(text="Ready")
             self.export_button.configure(state="normal")

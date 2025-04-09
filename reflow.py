@@ -487,6 +487,12 @@ class Reflow:
         if 'webflow-badge' in js_content or 'createBadge' in js_content:
             logger.info("Found Webflow badge code, removing...")
             
+            # 0. Remove the specific pattern for the Webflow badge
+            specific_badge_pattern = r'\{var e=t\(\'<a class="w-webflow-badge"></a>\'\)\.attr\("href","https://webflow\.com\?utm_campaign=brandjs"\),n=t\("<img>"\)\.attr\("src","https://d3e54v103j8qbb\.cloudfront\.net/img/webflow-badge-icon-d2\.89e12c322e\.svg"\)\.attr\("alt",""\)\.css\(\{marginRight:"4px",width:"26px"\}\),i=t\("<img>"\)\.attr\("src","https://d3e54v103j8qbb\.cloudfront\.net/img/webflow-badge-text-d2\.c82cec3b78\.svg"\)\.attr\("alt","Made in Webflow"\);return e\.append\(n,i\),e\[0\]\}'
+            if re.search(specific_badge_pattern, js_content):
+                logger.info("Found specific Webflow badge pattern, removing...")
+                js_content = re.sub(specific_badge_pattern, '{return null;}', js_content)
+            
             # 1. Find and remove the createBadge function
             # This is a more precise approach using string indices
             create_badge_start = js_content.find("function createBadge()")
@@ -853,6 +859,12 @@ class Reflow:
                                 
                                 for pattern in badge_append_patterns:
                                     js_content = re.sub(pattern, '', js_content)
+                            
+                            # Check for the specific badge pattern
+                            specific_badge_pattern = r'\{var e=t\(\'<a class="w-webflow-badge"></a>\'\)\.attr\("href","https://webflow\.com\?utm_campaign=brandjs"\),n=t\("<img>"\)\.attr\("src","https://d3e54v103j8qbb\.cloudfront\.net/img/webflow-badge-icon-d2\.89e12c322e\.svg"\)\.attr\("alt",""\)\.css\(\{marginRight:"4px",width:"26px"\}\),i=t\("<img>"\)\.attr\("src","https://d3e54v103j8qbb\.cloudfront\.net/img/webflow-badge-text-d2\.c82cec3b78\.svg"\)\.attr\("alt","Made in Webflow"\);return e\.append\(n,i\),e\[0\]\}'
+                            if re.search(specific_badge_pattern, js_content):
+                                logger.info(f"Found specific Webflow badge pattern in {file}, removing...")
+                                js_content = re.sub(specific_badge_pattern, '{return null;}', js_content)
                                 
                                 with open(js_path, 'w', encoding='utf-8') as f:
                                     f.write(js_content)

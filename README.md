@@ -4,8 +4,6 @@ Downloads Webflow sites to static HTML, preserving structure and styling.
 
 ![Reflow Screenshot](reflow.png)
 
-Download the latest release from: https://github.com/johnlindquist/Reflow/releases
-
 **Note:** When opening the exported HTML files locally, you may encounter CORS issues. To view the site properly, you can disable CORS in your browser or serve the files using a local server (e.g., `python -m http.server`).
 
 Install:
